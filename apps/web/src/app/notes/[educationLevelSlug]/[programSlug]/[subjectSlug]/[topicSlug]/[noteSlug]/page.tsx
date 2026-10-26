@@ -12,8 +12,9 @@ import {
   Presentation,
   Video,
 } from "lucide-react";
-
+import { apiRequest } from "@/lib/api";
 import type {
+  ApiResponse,
   Note,
   NoteResource,
 } from "@/types/api";
@@ -37,20 +38,29 @@ async function getNote(
   topicSlug: string,
   noteSlug: string,
 ): Promise<Note | null> {
-  const response = await fetch(
-    `http://localhost:5000/api/notes/slug/${educationLevelSlug}/${programSlug}/${subjectSlug}/${topicSlug}/${noteSlug}`,
-    {
-      cache: "no-store",
-    },
-  );
+  const path = [
+    educationLevelSlug,
+    programSlug,
+    subjectSlug,
+    topicSlug,
+    noteSlug,
+  ]
+    .map(encodeURIComponent)
+    .join("/");
 
-  if (!response.ok) {
+  try {
+    const response = await apiRequest<ApiResponse<Note>>(
+      `/notes/slug/${path}`,
+      {
+        cache: "no-store",
+      },
+    );
+
+    return response.data ?? null;
+  } catch (error) {
+    console.error("Failed to load note:", error);
     return null;
   }
-
-  const result = await response.json();
-
-  return result.data ?? null;
 }
 
 function getResourceIcon(type: NoteResource["type"]) {
