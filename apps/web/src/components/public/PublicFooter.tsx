@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import {
   ArrowUpRight,
@@ -8,6 +9,12 @@ import {
 } from "lucide-react";
 
 export default function PublicFooter() {
+  const [currentYear, setCurrentYear] = useState<number | null>(null);
+
+  useEffect(() => {
+    setCurrentYear(new Date().getFullYear());
+  }, []);
+
   return (
     <footer className="border-t border-[#dfe7dc] bg-[#202a31] text-white">
       <div className="mx-auto max-w-7xl px-5 py-12 sm:px-6 sm:py-14 lg:px-8">
@@ -119,7 +126,7 @@ export default function PublicFooter() {
 
         <div className="mt-10 flex flex-col gap-3 border-t border-white/10 pt-6 sm:flex-row sm:items-center sm:justify-between">
           <p className="text-xs text-white/40">
-            © {new Date().getFullYear()} Parro Notes. All
+            © {currentYear ?? 2026} Parro Notes. All
             rights reserved.
           </p>
 

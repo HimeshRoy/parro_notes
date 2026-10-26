@@ -9,7 +9,7 @@ import {
   Search,
 } from "lucide-react";
 import { Suspense } from "react";
-
+export const instant = false;
 import { apiRequest } from "@/lib/api";
 import type {
   ApiResponse,

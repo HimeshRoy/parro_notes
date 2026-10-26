@@ -103,9 +103,6 @@ export default function SearchBox() {
       case "subject":
         return "Subject";
 
-      case "academic-period":
-        return "Academic Period";
-
       case "program":
         return "Program";
 

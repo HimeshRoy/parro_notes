@@ -1,9 +1,19 @@
+
 "use client";
 
+import { FormEvent, useEffect, useState } from "react";
 import Link from "next/link";
-import { Search, ArrowRight } from "lucide-react";
-import { useEffect, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import {
+  ArrowUpRight,
+  BookOpen,
+  ChevronRight,
+  FileText,
+  FolderTree,
+  GraduationCap,
+  Search,
+  X,
+} from "lucide-react";
+import { useRouter, useSearchParams } from "next/navigation";
 
 import { apiRequest } from "@/lib/api";
 import type {
@@ -12,19 +22,149 @@ import type {
   SearchResult,
 } from "@/types/api";
 
-export default function SearchPage() {
+function slugify(value: string): string {
+  return value
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+/**
+ * Build URLs that match the public notes hierarchy:
+ * /notes/school
+ * /notes/school/class-10
+ * /notes/school/class-10/science
+ * /notes/school/class-10/science/physics
+ * /notes/school/class-10/science/physics/refraction-notes
+ *
+ * The API currently provides the parent's names and the
+ * result's own slug, so parent slugs are derived from names.
+ */
+function getResultHref(result: SearchResult): string {
+  const hierarchy = result.hierarchy;
+
+  let segments: string[];
+
+  switch (result.type) {
+    case "education-level":
+      segments = [result.slug];
+      break;
+
+    case "program":
+      segments = [
+        hierarchy.educationLevel
+          ? slugify(hierarchy.educationLevel)
+          : "",
+        result.slug,
+      ];
+      break;
+
+    case "subject":
+      segments = [
+        hierarchy.educationLevel
+          ? slugify(hierarchy.educationLevel)
+          : "",
+        hierarchy.program ? slugify(hierarchy.program) : "",
+        result.slug,
+      ];
+      break;
+
+    case "topic":
+      segments = [
+        hierarchy.educationLevel
+          ? slugify(hierarchy.educationLevel)
+          : "",
+        hierarchy.program ? slugify(hierarchy.program) : "",
+        hierarchy.subject ? slugify(hierarchy.subject) : "",
+        result.slug,
+      ];
+      break;
+
+    case "note":
+      segments = [
+        hierarchy.educationLevel
+          ? slugify(hierarchy.educationLevel)
+          : "",
+        hierarchy.program ? slugify(hierarchy.program) : "",
+        hierarchy.subject ? slugify(hierarchy.subject) : "",
+        hierarchy.topic ? slugify(hierarchy.topic) : "",
+        result.slug,
+      ];
+      break;
+
+    default:
+      return "/notes";
+  }
+
+  // Avoid creating an incorrect nested URL if the API
+  // hasn't supplied the required parent information.
+  if (segments.some((segment) => !segment)) {
+    return "/notes";
+  }
+
+  return `/notes/${segments
+    .map((segment) => encodeURIComponent(segment))
+    .join("/")}`;
+}
+
+function getTypeLabel(type: SearchResult["type"]): string {
+  switch (type) {
+    case "note":
+      return "Study note";
+    case "topic":
+      return "Topic";
+    case "subject":
+      return "Subject";
+    case "program":
+      return "Class / program";
+    case "education-level":
+      return "Education level";
+    default:
+      return "Resource";
+  }
+}
+
+function getTypeIcon(type: SearchResult["type"]) {
+  switch (type) {
+    case "note":
+      return <FileText size={18} strokeWidth={2} />;
+    case "topic":
+      return <FolderTree size={18} strokeWidth={2} />;
+    case "subject":
+      return <BookOpen size={18} strokeWidth={2} />;
+    case "program":
+    case "education-level":
+      return <GraduationCap size={18} strokeWidth={2} />;
+    default:
+      return <Search size={18} strokeWidth={2} />;
+  }
+}
+
+export default function SearchPageContent() {
+  const router = useRouter();
   const searchParams = useSearchParams();
 
-  const query = searchParams.get("q")?.trim() ?? "";
+  const queryFromUrl = searchParams.get("q")?.trim() ?? "";
 
+  const [input, setInput] = useState(queryFromUrl);
   const [results, setResults] = useState<SearchResult[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(Boolean(queryFromUrl));
   const [error, setError] = useState("");
 
   useEffect(() => {
-    if (!query) {
+    setInput(queryFromUrl);
+  }, [queryFromUrl]);
+
+  useEffect(() => {
+    if (!queryFromUrl) {
       setResults([]);
+      setTotal(0);
       setLoading(false);
+      setError("");
       return;
     }
 
@@ -37,23 +177,23 @@ export default function SearchPage() {
 
         const response = await apiRequest<
           ApiResponse<SearchResponse>
-        >(
-          `/search?q=${encodeURIComponent(query)}`,
-          {
-            signal: controller.signal,
-          }
-        );
+        >(`/search?q=${encodeURIComponent(queryFromUrl)}`, {
+          signal: controller.signal,
+        });
 
         setResults(response.data.results);
+        setTotal(response.data.total);
       } catch (err) {
         if (
-          err instanceof DOMException &&
+          err instanceof Error &&
           err.name === "AbortError"
         ) {
           return;
         }
 
-        setError("Unable to load search results.");
+        setResults([]);
+        setTotal(0);
+        setError("We couldn't load your results. Please try again.");
       } finally {
         if (!controller.signal.aborted) {
           setLoading(false);
@@ -61,168 +201,289 @@ export default function SearchPage() {
       }
     }
 
-    loadResults();
+    void loadResults();
 
     return () => controller.abort();
-  }, [query]);
+  }, [queryFromUrl]);
 
-  const getTypeLabel = (type: SearchResult["type"]) => {
-    switch (type) {
-      case "note":
-        return "Note";
+  function handleSearch(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
 
-      case "topic":
-        return "Topic";
+    const value = input.trim();
 
-      case "subject":
-        return "Subject";
-
-      case "academic-period":
-        return "Academic Period";
-
-      case "program":
-        return "Program";
-
-      case "education-level":
-        return "Education Level";
-
-      default:
-        return "Result";
+    if (!value) {
+      router.push("/search");
+      return;
     }
-  };
+
+    if (value === queryFromUrl) {
+      return;
+    }
+
+    router.push(`/search?q=${encodeURIComponent(value)}`);
+  }
+
+  function clearSearch() {
+    setInput("");
+    router.push("/search");
+  }
 
   return (
-    <main className="min-h-[calc(100vh-72px)] bg-slate-50/50">
-      <div className="mx-auto max-w-6xl px-4 py-12 sm:px-6 lg:px-8">
-        <div className="max-w-3xl">
-          <p className="text-sm font-bold uppercase tracking-[0.16em] text-blue-600">
-            Search
-          </p>
+    <main className="min-h-[calc(100vh-74px)] bg-[#FFFDF7] text-[#202A31]">
+      {/* Search header */}
 
-          <h1 className="mt-3 text-3xl font-extrabold tracking-tight text-slate-950 sm:text-4xl">
-            Search Parro Notes
-          </h1>
+      <section className="border-b border-[#E9E6DB] bg-white">
+        <div className="mx-auto max-w-5xl px-5 py-12 sm:px-6 sm:py-16 lg:px-8">
+          <div className="mx-auto max-w-3xl">
+            <div className="inline-flex items-center gap-2 rounded-full bg-[#EAF8E7] px-3 py-1.5 text-xs font-extrabold uppercase tracking-[0.12em] text-[#209E12]">
+              <Search size={14} strokeWidth={2.5} />
+              Study library
+            </div>
 
-          {query && (
-            <p className="mt-3 text-slate-500">
-              Results for{" "}
-              <span className="font-semibold text-slate-800">
-                "{query}"
-              </span>
+            <h1 className="mt-5 text-4xl font-black tracking-[-0.045em] text-[#202A31] sm:text-5xl">
+              Find what you need.
+            </h1>
+
+            <p className="mt-4 max-w-2xl text-base leading-7 text-[#748079] sm:text-lg">
+              One search for your study notes, subjects, topics,
+              classes and learning resources.
             </p>
-          )}
+
+            {/* Search input */}
+
+            <form onSubmit={handleSearch} className="mt-8">
+              <div className="flex min-h-[68px] items-center gap-2 rounded-[20px] border border-[#DCE5D8] bg-[#FFFDF7] p-2 shadow-[0_8px_28px_rgba(32,42,49,0.045)] transition-colors focus-within:border-[#24BD11]">
+                <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-[15px] bg-[#EAF8E7] text-[#24BD11]">
+                  <Search size={22} strokeWidth={2.2} />
+                </span>
+
+                <input
+                  type="text"
+                  value={input}
+                  onChange={(event) => setInput(event.target.value)}
+                  placeholder="Search notes, subjects, topics..."
+                  aria-label="Search the Parro Notes library"
+                  autoComplete="off"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  className="block h-12 min-w-0 flex-1 appearance-none border-0 bg-transparent px-2 text-base font-medium text-[#202A31] shadow-none outline-none ring-0 placeholder:text-[#9AA39F] focus:!border-0 focus:!shadow-none focus:!outline-none focus:!ring-0 focus-visible:!outline-none"
+                  style={{
+                    border: "none",
+                    outline: "none",
+                    boxShadow: "none",
+                  }}
+                />
+
+                {input.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={clearSearch}
+                    aria-label="Clear search"
+                    title="Clear search"
+                    className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-[#7B8580] transition-colors hover:bg-[#EAF8E7] hover:text-[#202A31] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#24BD11]"
+                  >
+                    <X size={19} strokeWidth={2} />
+                  </button>
+                )}
+
+                <button
+                  type="submit"
+                  className="inline-flex h-12 shrink-0 items-center justify-center gap-2 rounded-[15px] bg-[#24BD11] px-4 text-sm font-extrabold text-white transition-colors hover:bg-[#1FA70F] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#24BD11] sm:px-5"
+                >
+                  <span className="hidden sm:inline">Search</span>
+                  <ArrowUpRight
+                    size={18}
+                    strokeWidth={2.2}
+                    className="sm:hidden"
+                  />
+                  <ChevronRight
+                    size={17}
+                    strokeWidth={2.5}
+                    className="hidden sm:block"
+                  />
+                </button>
+              </div>
+
+              <p className="mt-3 px-1 text-xs text-[#919991]">
+                Search by a note title, topic, subject or class name.
+              </p>
+            </form>
+          </div>
         </div>
+      </section>
 
-        {!query && (
-          <div className="mt-12 rounded-2xl border border-slate-200 bg-white px-6 py-12 text-center">
-            <Search
-              size={32}
-              className="mx-auto text-slate-400"
-            />
+      {/* Search results */}
 
-            <h2 className="mt-4 text-lg font-bold text-slate-900">
-              Start searching
+      <section className="mx-auto max-w-5xl px-5 py-9 sm:px-6 sm:py-12 lg:px-8">
+        {!queryFromUrl && !loading && (
+          <div className="rounded-[24px] border border-[#E7E7DC] bg-white px-6 py-12 text-center sm:px-12">
+            <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-[18px] bg-[#EAF8E7] text-[#24BD11]">
+              <BookOpen size={26} strokeWidth={1.9} />
+            </div>
+
+            <h2 className="mt-5 text-xl font-extrabold tracking-tight">
+              What are you studying today?
             </h2>
 
-            <p className="mt-2 text-sm text-slate-500">
-              Search for notes, subjects, topics, programs, or academic periods.
+            <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-[#748079]">
+              Enter a keyword above. Select any result to open its
+              class, subject, topic or study note.
             </p>
           </div>
         )}
 
-        {loading && query && (
-          <div className="mt-10 rounded-2xl border border-slate-200 bg-white px-6 py-12 text-center">
-            <div className="mx-auto h-7 w-7 animate-spin rounded-full border-2 border-slate-200 border-t-blue-600" />
-
-            <p className="mt-4 text-sm text-slate-500">
-              Searching the Parro Notes library...
-            </p>
+        {loading && (
+          <div className="space-y-3" aria-label="Loading results">
+            {[1, 2, 3].map((item) => (
+              <div
+                key={item}
+                className="h-32 animate-pulse rounded-[22px] border border-[#E6E9E1] bg-white"
+              />
+            ))}
           </div>
         )}
 
         {!loading && error && (
-          <div className="mt-10 rounded-2xl border border-red-200 bg-red-50 px-6 py-8 text-sm font-medium text-red-700">
-            {error}
+          <div
+            role="alert"
+            className="rounded-[20px] border border-[#F0D8D4] bg-[#FFF7F5] p-6"
+          >
+            <p className="font-bold text-[#B94738]">{error}</p>
+            <button
+              type="button"
+              onClick={() =>
+                router.refresh()
+              }
+              className="mt-3 text-sm font-bold text-[#A43D30] underline underline-offset-4"
+            >
+              Try again
+            </button>
           </div>
         )}
 
-        {!loading &&
-          !error &&
-          query &&
-          results.length === 0 && (
-            <div className="mt-10 rounded-2xl border border-slate-200 bg-white px-6 py-12 text-center">
-              <h2 className="text-lg font-bold text-slate-900">
-                No results found
-              </h2>
-
-              <p className="mt-2 text-sm text-slate-500">
-                We couldn't find anything matching "{query}".
-              </p>
+        {!loading && !error && queryFromUrl && results.length === 0 && (
+          <div className="rounded-[24px] border border-[#E7E7DC] bg-white px-6 py-12 text-center sm:px-12">
+            <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-[18px] bg-[#F3F1EA] text-[#7B8580]">
+              <Search size={25} strokeWidth={1.9} />
             </div>
-          )}
 
-        {!loading &&
-          !error &&
-          results.length > 0 && (
-            <div className="mt-10 grid gap-4">
-              {results.map((result) => (
-                <div
-                  key={`${result.type}-${result.id}`}
-                  className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition hover:border-blue-200 hover:shadow-md"
-                >
-                  <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-                    <div className="min-w-0">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="rounded-full bg-blue-50 px-2.5 py-1 text-[11px] font-bold text-blue-600">
-                          {getTypeLabel(result.type)}
-                        </span>
+            <h2 className="mt-5 text-xl font-extrabold tracking-tight">
+              No matches this time
+            </h2>
 
-                        {result.code && (
-                          <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-600">
-                            {result.code}
+            <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-[#748079]">
+              We couldn't find anything for{" "}
+              <span className="font-bold text-[#202A31]">
+                “{queryFromUrl}”
+              </span>
+              . Try a shorter or different keyword.
+            </p>
+
+            <button
+              type="button"
+              onClick={clearSearch}
+              className="mt-5 rounded-xl bg-[#EAF8E7] px-4 py-2.5 text-sm font-bold text-[#209E12] transition-colors hover:bg-[#DDF3D8]"
+            >
+              Clear search
+            </button>
+          </div>
+        )}
+
+        {!loading && !error && results.length > 0 && (
+          <>
+            <div className="mb-6 flex flex-wrap items-end justify-between gap-3">
+              <div>
+                <p className="text-sm font-semibold text-[#7B8580]">
+                  Results for{" "}
+                  <span className="font-bold text-[#202A31]">
+                    “{queryFromUrl}”
+                  </span>
+                </p>
+
+                <h2 className="mt-1 text-2xl font-black tracking-[-0.035em]">
+                  {total} {total === 1 ? "result" : "results"}
+                </h2>
+              </div>
+
+            </div>
+
+            <div className="grid gap-3">
+              {results.map((result) => {
+                const href = getResultHref(result);
+
+                return (
+                  <Link
+                    key={`${result.type}-${result.id}`}
+                    href={href}
+                    aria-label={`Open ${getTypeLabel(result.type)}: ${result.title}`}
+                    className="group block rounded-[22px] border border-[#E5E8DF] bg-white p-5 shadow-[0_3px_14px_rgba(32,42,49,0.025)] transition-all duration-200 hover:-translate-y-0.5 hover:border-[#B9DDB1] hover:shadow-[0_10px_26px_rgba(32,42,49,0.065)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#24BD11] sm:p-6"
+                  >
+                    <div className="flex items-start gap-4">
+                      <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-[16px] bg-[#EAF8E7] text-[#24BD11] transition-colors group-hover:bg-[#24BD11] group-hover:text-white">
+                        {getTypeIcon(result.type)}
+                      </span>
+
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-[11px] font-extrabold uppercase tracking-[0.12em] text-[#209E12]">
+                            {getTypeLabel(result.type)}
                           </span>
+
+                          {result.code && (
+                            <>
+                              <span className="text-[#D2D8D0]">/</span>
+                              <span className="text-xs font-semibold text-[#858E87]">
+                                {result.code}
+                              </span>
+                            </>
+                          )}
+                        </div>
+
+                        <h3 className="mt-2 text-lg font-extrabold tracking-[-0.025em] text-[#202A31] transition-colors group-hover:text-[#209E12] sm:text-xl">
+                          {result.title}
+                        </h3>
+
+                        {result.description && (
+                          <p className="mt-2 max-w-2xl text-sm leading-6 text-[#748079]">
+                            {result.description}
+                          </p>
+                        )}
+
+                        {Object.values(result.hierarchy).some(Boolean) && (
+                          <div className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs font-medium text-[#929A93]">
+                            {Object.values(result.hierarchy)
+                              .filter(
+                                (value): value is string =>
+                                  Boolean(value),
+                              )
+                              .map((item, index, array) => (
+                                <span
+                                  key={`${item}-${index}`}
+                                  className="inline-flex items-center gap-2"
+                                >
+                                  {item}
+                                  {index < array.length - 1 && (
+                                    <span className="text-[#C5CDC3]">
+                                      /
+                                    </span>
+                                  )}
+                                </span>
+                              ))}
+                          </div>
                         )}
                       </div>
 
-                      <h2 className="mt-3 text-xl font-bold text-slate-900">
-                        {result.title}
-                      </h2>
-
-                      {result.description && (
-                        <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500">
-                          {result.description}
-                        </p>
-                      )}
-
-                      <div className="mt-4 flex flex-wrap gap-x-2 gap-y-1 text-xs text-slate-500">
-                        {Object.values(result.hierarchy)
-                          .filter(Boolean)
-                          .map((item, index, array) => (
-                            <span key={`${item}-${index}`}>
-                              {item}
-                              {index < array.length - 1 && (
-                                <span className="ml-2 text-slate-300">
-                                  /
-                                </span>
-                              )}
-                            </span>
-                          ))}
-                      </div>
+                      <span className="mt-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[#8A948B] transition-all group-hover:translate-x-0.5 group-hover:bg-[#EAF8E7] group-hover:text-[#209E12]">
+                        <ArrowUpRight size={19} strokeWidth={2.1} />
+                      </span>
                     </div>
-
-                    <Link
-                      href={`/notes/${result.id}`}
-                      className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-blue-600 to-green-600 px-4 py-2.5 text-sm font-bold text-white shadow-sm transition hover:shadow-md"
-                    >
-                      View
-                      <ArrowRight size={16} />
-                    </Link>
-                  </div>
-                </div>
-              ))}
+                  </Link>
+                );
+              })}
             </div>
-          )}
-      </div>
+          </>
+        )}
+      </section>
     </main>
   );
 }
